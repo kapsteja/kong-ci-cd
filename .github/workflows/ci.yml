@@ -1,0 +1,58 @@
+name: Test
+
+on: [push, pull_request]
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-20.04
+
+    services:
+      postgres:
+        image: postgres:13
+        env:
+          POSTGRES_USER: kong
+          POSTGRES_DB: kong
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: --health-cmd pg_isready --health-interval 5s --health-timeout 5s --health-retries 8
+
+    steps:
+      - name: Check out the source code
+        uses: actions/checkout@v2
+
+      - uses: actions/setup-node@v2
+        with:
+          node-version: "14"
+
+      - name: Install Kong
+        run: |
+          curl -Lo kong.2.5.0.amd64.deb "https://download.konghq.com/gateway-2.x-ubuntu-$(lsb_release -cs)/pool/all/k/kong/kong_2.5.0_amd64.deb"
+          sudo dpkg -i kong.2.5.0.amd64.deb
+
+      - name: Install Node dependencies
+        run: npm install
+
+      - name: Run Kong migrations
+        run: sudo kong migrations bootstrap --force
+
+      - name: Look up build cache
+        uses: actions/cache@v2
+        id: cache-deps
+        with:
+          path: |
+            kong.*.deb
+            node_modules/
+          key: cache-key-v1
+
+      - name: Start Kong
+        run: sudo kong start -c kong.custom.conf
+
+      - name: Set Kong service/route
+        run: |
+          curl -X POST -H 'Content-Type: application/json' http://localhost:8001/services -d '{"name":"node-server", "protocol": "http", "host":"localhost", "port": 3000}'
+          curl -X POST -H 'Content-Type: application/json' http://localhost:8001/routes -d '{"name":"api-route", "service": { "name": "node-server" }, "paths":["/api"]}'
+
+      - name: Run test
+        run: bash test.sh
